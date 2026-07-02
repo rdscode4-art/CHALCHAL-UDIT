@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- FCM notification accent color (matches AppColors.secondary) -->
+    <color name="notification_color">#4CAF50</color>
+</resources>
+ 

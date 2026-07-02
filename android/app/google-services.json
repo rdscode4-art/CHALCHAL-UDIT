@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "506610952857",
+    "project_id": "tamtamgadi-595f0",
+    "storage_bucket": "tamtamgadi-595f0.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:506610952857:android:1b92fe049d1be828ca2608",
+        "android_client_info": {
+          "package_name": "com.rds.tamtamgadi"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyChf_8F4Efu6GlEGQfVmplDxvEWti5QEdw"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

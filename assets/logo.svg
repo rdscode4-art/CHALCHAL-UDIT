@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- Background circle -->
+  <circle cx="512.0" cy="512.0" r="512.0" fill="#2E3440"/>
+  <!-- Red dot -->
+  <circle cx="427.52" cy="286.72" r="49.152" fill="#E53935"/>
+  <!-- Yellow dot -->
+  <circle cx="512.0" cy="286.72" r="49.152" fill="#FDD835"/>
+  <!-- Green dot -->
+  <circle cx="596.48" cy="286.72" r="49.152" fill="#43A047"/>
+  <!-- Title line 1 -->
+  <text x="512.0" y="532.48" text-anchor="middle" font-family="Georgia, serif"
+        font-weight="900" font-size="179.2" fill="white">Chal Chal</text>
+  <!-- Title line 2 -->
+  <text x="512.0" y="706.56" text-anchor="middle" font-family="Georgia, serif"
+        font-weight="900" font-size="179.2" fill="white">Gadi</text>
+  <!-- Tagline -->
+  <text x="512.0" y="849.9200000000001" text-anchor="middle" font-family="Georgia, serif"
+        font-weight="700" font-size="87.04" fill="#FDD835">My City Ride</text>
+</svg>
