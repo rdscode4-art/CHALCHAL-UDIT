@@ -415,25 +415,28 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
 
           // ── Quick Messages ────────────────────────────────────────────────
           if (!_loadingHistory)
-            Container(
-              height: 42,
-              margin: const EdgeInsets.only(bottom: 8),
-              child: ListView.separated(
-                scrollDirection: Axis.horizontal,
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                itemCount: _quickMessages.length,
-                separatorBuilder: (_, __) => const SizedBox(width: 8),
-                itemBuilder: (context, index) {
-                  final msg = _quickMessages[index];
-                  return ActionChip(
-                    label: Text(msg, style: TextStyle(fontSize: 13, color: textColor, fontWeight: FontWeight.w500)),
-                    backgroundColor: isDark ? AppColors.darkSurfaceSoft : AppColors.surfaceSoft,
-                    side: BorderSide(color: border),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 0),
-                    onPressed: () => _sendPresetMessage(msg),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: _quickMessages.map((msg) {
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: ActionChip(
+                      label: Center(
+                        child: Text(
+                          msg, 
+                          style: TextStyle(fontSize: 13, color: textColor, fontWeight: FontWeight.w500)
+                        ),
+                      ),
+                      backgroundColor: isDark ? AppColors.darkSurfaceSoft : AppColors.surfaceSoft,
+                      side: BorderSide(color: border),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      onPressed: () => _sendPresetMessage(msg),
+                    ),
                   );
-                },
+                }).toList(),
               ),
             ),
 
