@@ -35,14 +35,14 @@ void overlayMain() {
   );
 }
 
-/// Ride ID stored when driver taps a ride notification — consumed immediately
-/// by DriverHomeScreen on first build / resume to skip the polling wait.
-String? _pendingRideId;
+/// Reactive notifier for pending ride actions from notifications.
+/// Consumed by DriverHomeScreen to show popups.
+final ValueNotifier<String?> globalPendingRideAction = ValueNotifier<String?>(null);
 
-/// Consume the pending rideId (returns it and clears it).
+/// Legacy getter for compatibility, though reactive listening is preferred.
 String? consumePendingRideId() {
-  final id = _pendingRideId;
-  _pendingRideId = null;
+  final id = globalPendingRideAction.value;
+  globalPendingRideAction.value = null;
   return id;
 }
 
@@ -100,17 +100,22 @@ void main() async {
       return;
     }
 
-    // Pop to root (home screen) immediately for other notifications
-    navigatorKey.currentState?.popUntil((r) => r.isFirst);
     // If it's a ride payload, store the rideId so DriverHomeScreen
     // can show the popup immediately without waiting for the next poll
     if (payload.startsWith('ride:') || payload.startsWith('new_ride:')) {
       final isNewRide = payload.startsWith('new_ride:');
+      if (!isNewRide) {
+        // Pop to root (home screen) immediately for assigned rides
+        navigatorKey.currentState?.popUntil((r) => r.isFirst);
+      }
       final prefixLen = isNewRide ? 9 : 5;
       final rideId = payload.substring(prefixLen).trim();
       if (rideId.isNotEmpty) {
-        _pendingRideId = payload; // Store full payload to retain the type
+        globalPendingRideAction.value = payload; // Reactive notification payload
       }
+    } else {
+      // Pop to root (home screen) immediately for other notifications
+      navigatorKey.currentState?.popUntil((r) => r.isFirst);
     }
   };
 

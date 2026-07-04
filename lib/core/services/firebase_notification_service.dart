@@ -276,6 +276,7 @@ class FirebaseNotificationService {
     final initialMessage = await _fcm.getInitialMessage();
     if (initialMessage != null) {
       debugPrint('[FCM] App launched from notification');
+      cancelAllNotifications(); // Stop the alarm sound immediately
       // Delay to let the widget tree build before navigating
       Future.delayed(const Duration(milliseconds: 600), () {
         _routeFromPayload(_payloadFromMessage(initialMessage));
@@ -461,12 +462,14 @@ class FirebaseNotificationService {
   /// Called when user taps a local notification (flutter_local_notifications).
   void _onLocalNotificationTap(NotificationResponse response) {
     debugPrint('[FCM] Local notification tapped: ${response.payload}');
+    cancelAllNotifications();
     _routeFromPayload(response.payload ?? '');
   }
 
   /// Called when user taps an FCM notification from background state.
   void _onMessageOpenedApp(RemoteMessage message) {
     debugPrint('[FCM] Notification opened app: ${message.data}');
+    cancelAllNotifications();
     _routeFromPayload(_payloadFromMessage(message));
   }
 

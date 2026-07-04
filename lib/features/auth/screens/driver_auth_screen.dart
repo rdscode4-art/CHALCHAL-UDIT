@@ -861,10 +861,8 @@ class _DriverAuthScreenState extends State<DriverAuthScreen> {
             ),
           ),
 
-        if (_docRequired('drivinglicense') ||
-            _docRequired('driving_license') ||
-            _docRequired('license')) ...[
-          // License number (text)
+        // ── DL Number (text) ─────────────────────────────────────────────────
+        if (_docRequired('drivinglicensenumber')) ...[
           CustomTextField(
             hint: 'Driving License Number',
             prefixIcon: Icons.badge_outlined,
@@ -872,7 +870,10 @@ class _DriverAuthScreenState extends State<DriverAuthScreen> {
             keyboardType: TextInputType.text,
           ),
           const SizedBox(height: 12),
-          // License front photo
+        ],
+
+        // ── DL Photo ─────────────────────────────────────────────────────────
+        if (_docRequired('drivinglicense')) ...[
           CustomTextField(
             hint: context.tr('importLicensePhoto'),
             prefixIcon: Icons.image_outlined,
@@ -897,10 +898,8 @@ class _DriverAuthScreenState extends State<DriverAuthScreen> {
           const SizedBox(height: 16),
         ],
 
-        if (_docRequired('aadhar') ||
-            _docRequired('aadhaar') ||
-            _docRequired('aadharcard')) ...[
-          // Aadhar number (text)
+        // ── Aadhar Number (text) ──────────────────────────────────────────────
+        if (_docRequired('aadharnumber')) ...[
           CustomTextField(
             hint: 'Aadhar Card Number',
             prefixIcon: Icons.credit_card_outlined,
@@ -908,7 +907,10 @@ class _DriverAuthScreenState extends State<DriverAuthScreen> {
             keyboardType: TextInputType.number,
           ),
           const SizedBox(height: 12),
-          // Aadhar front photo
+        ],
+
+        // ── Aadhar Photos ─────────────────────────────────────────────────────
+        if (_docRequired('aadhar')) ...[
           CustomTextField(
             hint: context.tr('importAadharFront'),
             prefixIcon: Icons.image_outlined,
@@ -954,6 +956,7 @@ class _DriverAuthScreenState extends State<DriverAuthScreen> {
           ),
           const SizedBox(height: 16),
         ],
+
 
         if (_docRequired('rc') || _docRequired('registrationcertificate')) ...[
           CustomTextField(

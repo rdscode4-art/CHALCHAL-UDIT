@@ -44,7 +44,7 @@ import '../../../core/services/map_utils.dart';
 import '../../../core/services/socket_service.dart';
 import '../../../core/utils/device_utils.dart';
 import '../../../core/models/ride.dart';
-import '../../../main.dart' show consumePendingRideId;
+import '../../../main.dart' show consumePendingRideId, globalPendingRideAction;
 
 class DriverHomeScreen extends StatefulWidget {
   const DriverHomeScreen({super.key});
@@ -320,6 +320,21 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     }
   }
 
+  void _onPendingRideActionChanged() {
+    final pendingAction = consumePendingRideId();
+    if (pendingAction != null && pendingAction.isNotEmpty) {
+      debugPrint('[REACTIVE] Handling pending action from notification tap: $pendingAction');
+      FirebaseNotificationService().cancelAllNotifications(); // Stop notification sound immediately
+      if (pendingAction.startsWith('new_ride:')) {
+        _handleNewRequestPush(pendingAction.substring(9).trim());
+      } else if (pendingAction.startsWith('ride:')) {
+        _handleRideAssignedPush(pendingAction.substring(5).trim());
+      } else {
+        _handleRideAssignedPush(pendingAction);
+      }
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -330,29 +345,24 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     _startDashboardSyncTimer();
     _initLocationMonitoring();
     _setupFcmListener();
+    globalPendingRideAction.addListener(_onPendingRideActionChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _initSubscription();
       CategoryService.instance.fetchCategories(role: 'driver');
       // Consume any pending payload from a notification tap that launched the app
-      final pendingAction = consumePendingRideId();
-      if (pendingAction != null && pendingAction.isNotEmpty) {
-        debugPrint(
-          '[INIT] Handling pending action from notification tap: $pendingAction',
-        );
-        if (pendingAction.startsWith('new_ride:')) {
-          _handleNewRequestPush(pendingAction.substring(9).trim());
-        } else if (pendingAction.startsWith('ride:')) {
-          _handleRideAssignedPush(pendingAction.substring(5).trim());
-        } else {
-          _handleRideAssignedPush(pendingAction);
-        }
-      }
+      _onPendingRideActionChanged();
+      // Unconditionally cancel any ringing background notifications if app was opened normally via app icon
+      FirebaseNotificationService().cancelAllNotifications();
       // Request notification and battery optimization permissions right after login
       _requestPermissionsOnInit();
     });
   }
 
-  void _showPermissionDialog(String title, String content, VoidCallback onOpenSettings) {
+  void _showPermissionDialog(
+    String title,
+    String content,
+    VoidCallback onOpenSettings,
+  ) {
     if (!mounted) return;
     showDialog(
       context: context,
@@ -380,12 +390,12 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
 
   Future<void> _requestPermissionsOnInit() async {
     SharedPreferences prefs = await SharedPreferences.getInstance();
-    
+
     try {
       if (await Permission.notification.isDenied) {
         await Permission.notification.request();
       }
-      
+
       final hasAskedBatteryOpt = prefs.getBool('asked_battery_opt') ?? false;
       if (!hasAskedBatteryOpt) {
         await prefs.setBool('asked_battery_opt', true);
@@ -393,7 +403,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
           await Permission.ignoreBatteryOptimizations.request();
         }
       }
-      
+
       final locStatus = await Permission.location.request();
       if (locStatus.isDenied || locStatus.isPermanentlyDenied) {
         _showPermissionDialog(
@@ -413,7 +423,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     if (defaultTargetPlatform == TargetPlatform.android) {
       try {
         final hasAskedAutoStart = prefs.getBool('asked_auto_start') ?? false;
-        
+
         if (!hasAskedAutoStart) {
           await prefs.setBool('asked_auto_start', true);
           final available = await isAutoStartAvailable;
@@ -434,7 +444,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
         if (!status) {
           debugPrint('🔴 [INIT] Requesting overlay permission...');
           await FlutterOverlayWindow.requestPermission();
-          
+
           // Re-check after user returns
           bool finalStatus = await FlutterOverlayWindow.isPermissionGranted();
           if (!finalStatus) {
@@ -502,10 +512,9 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
         if (mounted) {
           bool wasWaiting = false;
           setState(() {
-            if (_waitingForRideId == rideId) {
+            if (_waitingRides.containsKey(rideId)) {
               wasWaiting = true;
-              _waitingForRideId = null;
-              _waitingForRideData = null;
+              _waitingRides.remove(rideId);
               _waitingCheckTickCount = 0;
             }
           });
@@ -633,8 +642,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
 
       if (result == 'interested') {
         setState(() {
-          _waitingForRideId = rideId;
-          _waitingForRideData = rideData;
+          _waitingRides[rideId] = rideData;
           _interestReflected = true;
           _waitingCheckTickCount = 0;
         });
@@ -697,8 +705,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     // the complex logic to show the Accept Ride screen, call the acceptRide API,
     // and navigate to the Active Ride screen.
     setState(() {
-      _waitingForRideId = rideId;
-      _waitingForRideData = rideData;
+      _waitingRides[rideId] = rideData;
       // Pretend we already reflected interest so it doesn't clear the state early
       _interestReflected = true;
     });
@@ -746,35 +753,44 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
         _performPollingTick();
       }
     } else if (state == AppLifecycleState.paused) {
+      _pollTimer?.cancel();
       _dashboardSyncTimer?.cancel();
       debugPrint('🔴 [LIFECYCLE] AppLifecycleState.paused triggered');
       if (_isOnline && defaultTargetPlatform == TargetPlatform.android) {
-        debugPrint('🔴 [OVERLAY] Attempting to check permission and show overlay...');
-        FlutterOverlayWindow.isPermissionGranted().then((granted) async {
-          debugPrint('🔴 [OVERLAY] Permission granted status: $granted');
-          if (granted) {
-            try {
-              debugPrint('🔴 [OVERLAY] Calling showOverlay()...');
-              await FlutterOverlayWindow.showOverlay(
-                enableDrag: true,
-                overlayTitle: "Chal Chal Gaadi",
-                overlayContent: "Online",
-                flag: OverlayFlag.defaultFlag,
-                visibility: NotificationVisibility.visibilityPublic,
-                positionGravity: PositionGravity.auto,
-                height: 120,
-                width: 120,
-              );
-              debugPrint('🔴 [OVERLAY] showOverlay executed successfully');
-            } catch (e, stackTrace) {
-              debugPrint('🔴 [OVERLAY] ERROR in showOverlay: $e\n$stackTrace');
-            }
-          } else {
-            debugPrint('🔴 [OVERLAY] Permission is NOT granted. Cannot show overlay.');
-          }
-        }).catchError((e) {
-          debugPrint('🔴 [OVERLAY] ERROR checking permission: $e');
-        });
+        debugPrint(
+          '🔴 [OVERLAY] Attempting to check permission and show overlay...',
+        );
+        FlutterOverlayWindow.isPermissionGranted()
+            .then((granted) async {
+              debugPrint('🔴 [OVERLAY] Permission granted status: $granted');
+              if (granted) {
+                try {
+                  debugPrint('🔴 [OVERLAY] Calling showOverlay()...');
+                  await FlutterOverlayWindow.showOverlay(
+                    enableDrag: true,
+                    overlayTitle: "Chal Chal Gaadi",
+                    overlayContent: "Online",
+                    flag: OverlayFlag.defaultFlag,
+                    visibility: NotificationVisibility.visibilityPublic,
+                    positionGravity: PositionGravity.auto,
+                    height: 120,
+                    width: 120,
+                  );
+                  debugPrint('🔴 [OVERLAY] showOverlay executed successfully');
+                } catch (e, stackTrace) {
+                  debugPrint(
+                    '🔴 [OVERLAY] ERROR in showOverlay: $e\n$stackTrace',
+                  );
+                }
+              } else {
+                debugPrint(
+                  '🔴 [OVERLAY] Permission is NOT granted. Cannot show overlay.',
+                );
+              }
+            })
+            .catchError((e) {
+              debugPrint('🔴 [OVERLAY] ERROR checking permission: $e');
+            });
       }
     }
   }
@@ -791,7 +807,10 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     _locationEmitTimer?.cancel();
     _locationEmitTimer = Timer.periodic(const Duration(seconds: 2), (_) {
       if (mounted && _isOnline && _currentLatLng != null) {
-        _updateLocationOnServer(_currentLatLng!.latitude, _currentLatLng!.longitude);
+        _updateLocationOnServer(
+          _currentLatLng!.latitude,
+          _currentLatLng!.longitude,
+        );
       }
     });
   }
@@ -1288,10 +1307,12 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
               _loadShownRideIds();
               _startPolling();
               _performPollingTick();
-              
+
               // Ensure background service starts if they are online on app launch
               FlutterBackgroundService().startService().then((success) {
-                debugPrint('🚀 [Background Service] Auto-started on launch: $success');
+                debugPrint(
+                  '🚀 [Background Service] Auto-started on launch: $success',
+                );
               });
             }
           }
@@ -1405,10 +1426,10 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     RideRequestService.clearQueue();
     DriverRepository.logout();
     await SessionService.clear();
-    
+
     // Ensure the background foreground-service stops running after logout
     FlutterBackgroundService().invoke('stopService');
-    
+
     if (!mounted) return;
     Navigator.pushAndRemoveUntil(
       context,
@@ -1529,20 +1550,26 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     if (val) {
       final success = await FlutterBackgroundService().startService();
       debugPrint('🚀 [Background Service] startService returned: $success');
-      
+
       // SHOW OVERLAY PERMISSION PROMPT ONLY
       if (defaultTargetPlatform == TargetPlatform.android) {
         debugPrint('🔴 [TOGGLE_ONLINE] Checking overlay permission...');
         try {
           bool status = await FlutterOverlayWindow.isPermissionGranted();
-          debugPrint('🔴 [TOGGLE_ONLINE] Current overlay permission status: $status');
+          debugPrint(
+            '🔴 [TOGGLE_ONLINE] Current overlay permission status: $status',
+          );
           if (!status) {
             debugPrint('🔴 [TOGGLE_ONLINE] Requesting overlay permission...');
             final reqStatus = await FlutterOverlayWindow.requestPermission();
-            debugPrint('🔴 [TOGGLE_ONLINE] Requested overlay permission returned: $reqStatus');
+            debugPrint(
+              '🔴 [TOGGLE_ONLINE] Requested overlay permission returned: $reqStatus',
+            );
           }
         } catch (e) {
-          debugPrint('🔴 [TOGGLE_ONLINE] ERROR during overlay permission check: $e');
+          debugPrint(
+            '🔴 [TOGGLE_ONLINE] ERROR during overlay permission check: $e',
+          );
         }
       }
 
@@ -1570,12 +1597,12 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
       _performPollingTick();
     } else {
       FlutterBackgroundService().invoke('stopService');
-      
+
       // CLOSE OVERLAY
       if (defaultTargetPlatform == TargetPlatform.android) {
         FlutterOverlayWindow.closeOverlay();
       }
-      
+
       _pollTimer?.cancel();
       // Leave socket driver room and remove ride listeners
       SessionService.getDriverId().then((driverId) {
@@ -1936,8 +1963,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
       _unmarkRideIgnored(rideId);
       setState(() {
         _isOnline = true;
-        _waitingForRideId = rideId;
-        _waitingForRideData = normalized;
+        _waitingRides[rideId] = normalized;
         _interestReflected = false;
         _waitingCheckTickCount = 0; // Reset throttle counter on new interest
       });
@@ -2021,8 +2047,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     }
   }
 
-  String? _waitingForRideId;
-  Map<String, dynamic>? _waitingForRideData;
+  Map<String, Map<String, dynamic>> _waitingRides = {};
   bool _interestReflected = false;
 
   /// Called when driver declines or ignores a ride request.
@@ -2071,9 +2096,11 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     if (driverId == null || driverId.isEmpty) return;
 
     setState(() {
-      _waitingForRideId = null;
-      _waitingForRideData = null;
+      _waitingRides.remove(rideId);
     });
+    
+    // Ignore this ride locally so it doesn't auto-recover before backend updates
+    await _markRideIgnored(rideId);
 
     try {
       // Call dedicated cancel interest API
@@ -2148,7 +2175,9 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     if (createdAt != null) {
       final age = DateTime.now().difference(createdAt);
       if (age.inMinutes > 5) {
-        debugPrint('⏳ Broadcast Ride $rideId is too old (${age.inMinutes} mins). Ignoring.');
+        debugPrint(
+          '⏳ Broadcast Ride $rideId is too old (${age.inMinutes} mins). Ignoring.',
+        );
         return false;
       }
     }
@@ -2216,226 +2245,176 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
       }
 
       // â”€â”€ Step 1: If we are already waiting for a ride confirmation â”€â”€
-      if (_waitingForRideId != null) {
+      if (_waitingRides.isNotEmpty) {
         // Throttle: only call getRide every 3rd tick (~15–30 s) to reduce spam
         _waitingCheckTickCount++;
         if (_waitingCheckTickCount % 3 != 0) {
           debugPrint(
-            'â³ Waiting tick $_waitingCheckTickCount — skipping getRide, next check at tick ${_waitingCheckTickCount + (3 - _waitingCheckTickCount % 3)}',
+            '⏳ Waiting tick $_waitingCheckTickCount — skipping getRide, next check at tick ${_waitingCheckTickCount + (3 - _waitingCheckTickCount % 3)}',
           );
-          return;
-        }
-        debugPrint(
-          'ðŸ” Waiting tick $_waitingCheckTickCount — calling getRide for $_waitingForRideId',
-        );
-        final res = await ApiService.getRide(_waitingForRideId!);
-        if (res.success && res.data.isNotEmpty) {
-          final ride = ApiService.unwrapRidePayload(res.data);
-          final status = RideStatus.normalize(ride['status']?.toString());
-          final assignedDriverId =
-              ride['driverId']?.toString() ??
-              ride['assignedDriverId']?.toString() ??
-              '';
+        } else {
+          final keys = _waitingRides.keys.toList();
+          for (final rideId in keys) {
+            final res = await ApiService.getRide(rideId);
+            if (res.success && res.data.isNotEmpty) {
+              final ride = ApiService.unwrapRidePayload(res.data);
+              final status = RideStatus.normalize(ride['status']?.toString());
+              final assignedDriverId =
+                  ride['driverId']?.toString() ??
+                  ride['assignedDriverId']?.toString() ??
+                  '';
 
-          if (assignedDriverId == driverId) {
-            // The passenger confirmed us! Show an accept/decline popup
-            // before going to the active ride screen.
-            debugPrint(
-              'ðŸŽ¯ User assigned this ride to us! Showing confirmation popup...',
-            );
-            final rideId = _waitingForRideId!;
-
-            // Clear waiting state first so polling doesn't re-trigger
-            setState(() {
-              _waitingForRideId = null;
-              _waitingForRideData = null;
-              _isOnline = false;
-              _isShowingRequestScreen = true;
-            });
-            _pollTimer?.cancel();
-
-            final pickup =
-                ride['pickupLocation']?.toString() ??
-                ride['pickup']?.toString() ??
-                'Pickup';
-            final destination =
-                ride['dropoffLocation']?.toString() ??
-                ride['destination']?.toString() ??
-                'Destination';
-            final rType =
-                ride['rideType']?.toString() ??
-                ride['vehicleType']?.toString() ??
-                _vehicleType;
-            final dist = ApiService.formatDistanceDisplay(
-              ride['distance'] ?? ride['distanceKm'],
-            );
-            final dur = ApiService.formatDurationDisplay(
-              ride['duration'] ?? ride['durationMin'],
-            );
-            final fareNum = ApiService.resolveRideFare(ride);
-            final fare = fareNum?.toString();
-
-            if (!mounted) return;
-
-            String? result;
-            try {
-              // Show RideRequestScreen as the final accept/decline step.
-              // This time the label is "Accept Ride" instead of "I'm Available".
-              result = await Navigator.push<String>(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => RideRequestScreen(
-                    rideId: rideId,
-                    pickup: pickup,
-                    destination: destination,
-                    rideType: rType,
-                    distance: dist != '—' ? dist : '—',
-                    duration: dur != '—' ? dur : '—',
-                    fare: fare,
-                    isAssigned: true, // â† tells screen to show "Accept Ride"
-                  ),
-                ),
-              );
-            } finally {
-              if (mounted) {
-                setState(() => _isShowingRequestScreen = false);
-              }
-            }
-
-            if (!mounted) return;
-
-            if (result == 'interested' || result == 'accepted') {
-              // Driver accepted — call the accept API then navigate
-              debugPrint('âœ… [ACCEPT] Calling acceptRide API for $rideId');
-              final driverIdForAccept = driverId;
-              ApiService.acceptRide(
-                rideId: rideId,
-                driverId: driverIdForAccept,
-                distance: dist != '—' ? dist : null,
-                distanceKm: ApiService.parseDistanceKm(
-                  ride['distanceKm'] ?? ride['distance'],
-                ),
-                duration: dur != '—' ? dur : null,
-                durationMin: ApiService.parseDurationMin(
-                  ride['durationMin'] ?? ride['duration'],
-                ),
-              ).then((res) {
+              if (assignedDriverId == driverId) {
+                // The passenger confirmed us! Show an accept/decline popup
                 debugPrint(
-                  res.success
-                      ? 'âœ… [ACCEPT] acceptRide succeeded'
-                      : 'âš ï¸ [ACCEPT] acceptRide failed: ${res.errorMessage}',
+                  '🎯 User assigned ride $rideId to us! Showing confirmation popup...',
                 );
-              });
 
-              if (mounted) {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => DriverActiveRideScreen(
-                      rideId: rideId,
-                      pickup: pickup,
-                      destination: destination,
-                      rideType: rType,
-                      distance: dist != '—' ? dist : '—',
-                      duration: dur != '—' ? dur : '—',
-                      fare: fare, // â† pass fare so driver sees it immediately
+                setState(() {
+                  _waitingRides.remove(rideId);
+                  _isOnline = false;
+                  _isShowingRequestScreen = true;
+                });
+                _pollTimer?.cancel();
+
+                final pickup =
+                    ride['pickupLocation']?.toString() ??
+                    ride['pickup']?.toString() ??
+                    'Pickup';
+                final destination =
+                    ride['dropoffLocation']?.toString() ??
+                    ride['destination']?.toString() ??
+                    'Destination';
+                final rType =
+                    ride['rideType']?.toString() ??
+                    ride['vehicleType']?.toString() ??
+                    _vehicleType;
+                final dist = ApiService.formatDistanceDisplay(
+                  ride['distance'] ?? ride['distanceKm'],
+                );
+                final dur = ApiService.formatDurationDisplay(
+                  ride['duration'] ?? ride['durationMin'],
+                );
+                final fareNum = ApiService.resolveRideFare(ride);
+                final fare = fareNum?.toString();
+
+                if (!mounted) return;
+
+                String? result;
+                try {
+                  result = await Navigator.push<String>(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => RideRequestScreen(
+                        rideId: rideId,
+                        pickup: pickup,
+                        destination: destination,
+                        rideType: rType,
+                        distance: dist != '—' ? dist : '—',
+                        duration: dur != '—' ? dur : '—',
+                        fare: fare,
+                        isAssigned: true,
+                      ),
                     ),
-                  ),
-                ).then((_) {
+                  );
+                } finally {
+                  if (mounted) setState(() => _isShowingRequestScreen = false);
+                }
+
+                if (!mounted) return;
+
+                if (result == 'interested' || result == 'accepted') {
+                  debugPrint('✅ [ACCEPT] Calling acceptRide API for $rideId');
+                  ApiService.acceptRide(
+                    rideId: rideId,
+                    driverId: driverId,
+                    distance: dist != '—' ? dist : null,
+                    distanceKm: ApiService.parseDistanceKm(
+                      ride['distanceKm'] ?? ride['distance'],
+                    ),
+                    duration: dur != '—' ? dur : null,
+                    durationMin: ApiService.parseDurationMin(
+                      ride['durationMin'] ?? ride['duration'],
+                    ),
+                  ).then((res) {
+                    debugPrint(
+                      res.success
+                          ? '✅ [ACCEPT] acceptRide succeeded'
+                          : '⚠️ [ACCEPT] acceptRide failed: ${res.errorMessage}',
+                    );
+                  });
+
+                  if (mounted) {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => DriverActiveRideScreen(
+                          rideId: rideId,
+                          pickup: pickup,
+                          destination: destination,
+                          rideType: rType,
+                          distance: dist != '—' ? dist : '—',
+                          duration: dur != '—' ? dur : '—',
+                          fare: fare,
+                        ),
+                      ),
+                    ).then((_) {
+                      if (mounted) {
+                        setState(() => _isOnline = true);
+                        _startPolling();
+                      }
+                    });
+                  }
+                } else {
+                  debugPrint('❌ Driver declined the final assignment.');
+                  await _markRideIgnored(rideId);
+                  ApiService.rejectRide(
+                    rideId: rideId,
+                    driverId: driverId,
+                  ).then((res) {});
+                  unawaited(_markDriverNotInterested(rideId, driverId));
                   if (mounted) {
                     setState(() => _isOnline = true);
                     _startPolling();
                   }
-                });
+                }
+                return; // End poll tick since we navigated
+              }
+
+              final List<dynamic> interested = List.from(
+                ride['availableDrivers'] ?? ride['interestedDrivers'] ?? [],
+              );
+              final isInterested = interested
+                  .map((e) => e.toString())
+                  .contains(driverId);
+
+              if (!isInterested && assignedDriverId != driverId) {
+                debugPrint(
+                  '⏸️ Driver is no longer in the interested list for $rideId. Clearing waiting state.',
+                );
+                setState(() => _waitingRides.remove(rideId));
+              } else if (assignedDriverId.isNotEmpty &&
+                  assignedDriverId != driverId) {
+                debugPrint(
+                  '⏸️ Ride $rideId was assigned to another driver. Clearing waiting state.',
+                );
+                setState(() => _waitingRides.remove(rideId));
+              } else if (status == 'cancelled' || status == 'completed') {
+                debugPrint(
+                  '⏸️ Ride $rideId status changed to $status. Clearing waiting state.',
+                );
+                setState(() => _waitingRides.remove(rideId));
+              } else {
+                setState(() => _waitingRides[rideId] = ride);
               }
             } else {
-              // Driver declined — call reject API, mark not interested, go online
-              debugPrint('ðŸš« Driver declined assigned ride $rideId');
-              await _markRideIgnored(rideId);
-              // Call reject-ride API (new endpoint with legacy fallback)
-              ApiService.rejectRide(rideId: rideId, driverId: driverId).then((
-                res,
-              ) {
-                debugPrint(
-                  res.success
-                      ? 'âœ… [REJECT] rejectRide succeeded'
-                      : 'âš ï¸ [REJECT] rejectRide failed: ${res.errorMessage}',
-                );
-              });
-              unawaited(_markDriverNotInterested(rideId, driverId));
-              if (mounted) {
-                setState(() => _isOnline = true);
-                _startPolling();
-              }
+              debugPrint(
+                '⏸️ getRide failed (status=${res.statusCode}). Clearing waiting state for $rideId.',
+              );
+              if (res.statusCode == 404) await _markRideIgnored(rideId);
+              setState(() => _waitingRides.remove(rideId));
             }
-            return;
           }
-
-          final List<dynamic> interested = List.from(
-            ride['availableDrivers'] ?? ride['interestedDrivers'] ?? [],
-          );
-          final isInterested = interested
-              .map((e) => e.toString())
-              .contains(driverId);
-
-          if (isInterested) {
-            _interestReflected = true;
-          }
-
-          if (_interestReflected &&
-              !isInterested &&
-              assignedDriverId != driverId) {
-            debugPrint(
-              'â­ï¸ Driver is no longer in the interested list. Clearing waiting state.',
-            );
-            setState(() {
-              _waitingForRideId = null;
-              _waitingForRideData = null;
-              _interestReflected = false;
-              _waitingCheckTickCount = 0;
-            });
-          } else if (assignedDriverId.isNotEmpty &&
-              assignedDriverId != driverId) {
-            // Assigned to someone else
-            debugPrint(
-              'â­ï¸ Ride was assigned to another driver. Clearing waiting state.',
-            );
-            setState(() {
-              _waitingForRideId = null;
-              _waitingForRideData = null;
-              _waitingCheckTickCount = 0;
-            });
-          } else if (status == 'cancelled' || status == 'completed') {
-            // Cancelled or finished
-            debugPrint(
-              'â­ï¸ Ride status changed to $status. Clearing waiting state.',
-            );
-            setState(() {
-              _waitingForRideId = null;
-              _waitingForRideData = null;
-              _waitingCheckTickCount = 0;
-            });
-          } else {
-            // Still waiting, update details
-            setState(() {
-              _waitingForRideData = ride;
-            });
-          }
-        } else {
-          // Ride not found (404) or request failed — stop polling this ride
-          debugPrint(
-            'â­ï¸ getRide failed (status=${res.statusCode}). Clearing waiting state.',
-          );
-          if (res.statusCode == 404) {
-            // Ride deleted from server — stop all polling for it
-            await _markRideIgnored(_waitingForRideId!);
-          }
-          setState(() {
-            _waitingForRideId = null;
-            _waitingForRideData = null;
-            _interestReflected = false;
-            _waitingCheckTickCount = 0;
-          });
         }
       }
 
@@ -2448,7 +2427,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
       // call for each one — causing a cascade of 404s.
       // Real-time assigned rides arrive via FCM (_handleRideAssignedPush).
       // Unassigned broadcast rides come from getPendingRides below.
-      if (_waitingForRideId == null) {
+      if (true) {
+        // Always fetch broadcast rides to auto-populate _waitingRides on restart
         final zoneId = await SessionService.getZoneId();
         final broadcastRes = await ApiService.getPendingRides(zoneId: zoneId);
         if (broadcastRes.success && mounted && _isOnline) {
@@ -2463,6 +2443,18 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
             final rId = _rideIdFromData(item);
             if (rId.isEmpty) continue;
 
+            final interestedList = List.from(
+              item['availableDrivers'] ?? item['interestedDrivers'] ?? [],
+            );
+            if (interestedList.map((e) => e.toString()).contains(driverId)) {
+              if (!_waitingRides.containsKey(rId) && !_ignoredRideIds.contains(rId)) {
+                debugPrint('🔄 Auto-recovering interested ride: $rId');
+                setState(() {
+                  _waitingRides[rId] = item;
+                });
+              }
+              continue; // Already interested, skip local popup queue
+            }
             if (_shouldPresentBroadcastRide(item, driverId)) {
               debugPrint(
                 '🎯 Broadcasted unassigned ride matches: $rId, adding to local queue',
@@ -2475,10 +2467,10 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
       }
       // ── Step 4: Show popup for unassigned queued rides if not already showing one ──
       debugPrint(
-        'STEP 4: _isShowingRequestScreen=$_isShowingRequestScreen, _waitingForRideId=$_waitingForRideId, _isOnline=$_isOnline',
+        'STEP 4: _isShowingRequestScreen=$_isShowingRequestScreen, _waitingRides=${_waitingRides.length}, _isOnline=$_isOnline',
       );
       if (!_isShowingRequestScreen &&
-          _waitingForRideId == null &&
+          _waitingRides.isEmpty &&
           mounted &&
           _isOnline) {
         final localRides = RideRequestService.pendingRequests;
@@ -2492,13 +2484,16 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
           );
           if (rId.isEmpty || _ignoredRideIds.contains(rId)) continue;
           if (_isShowingRequestScreen) break; // Double check
+          if (_waitingRides.containsKey(rId)) {
+            continue; // Already interested
+          }
 
           // Claim screen synchronously before await
           setState(() => _isShowingRequestScreen = true);
 
           try {
             // Found an unassigned ride that hasn't been ignored locally. Show popup instantly.
-            // We do not await ApiService.enrichRideWithRouteDetails here because 
+            // We do not await ApiService.enrichRideWithRouteDetails here because
             // RideRequestScreen already fetches getRide() in its initState().
             if (!mounted) return;
 
@@ -2547,8 +2542,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
               // Driver expressed interest! The RideRequestScreen already called declareDriverAvailable API.
               // We just set our state to wait for the user to assign.
               setState(() {
-                _waitingForRideId = rId;
-                _waitingForRideData = ride;
+                _waitingRides[rId] = ride;
                 _interestReflected = true;
                 _waitingCheckTickCount = 0;
               });
@@ -2659,6 +2653,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     _pollTimer?.cancel();
     _currentRideTimer?.cancel();
     _dashboardSyncTimer?.cancel();
+    globalPendingRideAction.removeListener(_onPendingRideActionChanged);
     _positionSubscription?.cancel();
     // Best-effort: try to mark offline when widget is disposed.
     _markDriverOffline(); // ignore: unawaited_futures
@@ -3203,161 +3198,167 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
               _buildActiveRideBanner(context),
             ],
 
-            if (_waitingForRideId != null && _waitingForRideData != null) ...[
-              const SizedBox(height: 16),
-              GlassCard(
-                borderRadius: BorderRadius.circular(20),
-                padding: const EdgeInsets.all(16),
-                color: AppColors.accentYellow.withAlpha(isDark ? 40 : 20),
-                border: Border.all(
-                  color: AppColors.accentYellow.withAlpha(120),
-                  width: 1.5,
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // â”€â”€ Header â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-                    Row(
-                      children: [
-                        const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2.5,
-                            color: AppColors.accentYellow,
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Text(
-                            'Waiting for Passenger Confirmation...',
-                            style: AppTextStyles.heading.copyWith(
-                              fontSize: 16,
-                              color: textPri,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 12),
-                    // â”€â”€ Route â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-                    Text(
-                      'Pickup: ${_waitingForRideData!['pickup'] ?? 'Pickup'}',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: AppTextStyles.body.copyWith(
-                        fontSize: 13,
-                        color: textSec,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      'Destination: ${_waitingForRideData!['destination'] ?? 'Destination'}',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: AppTextStyles.body.copyWith(
-                        fontSize: 13,
-                        color: textSec,
-                      ),
-                    ),
-                    const SizedBox(height: 14),
-                    // â”€â”€ Chat button â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-                    SizedBox(
-                      width: double.infinity,
-                      child: OutlinedButton.icon(
-                        onPressed: () async {
-                          final driverId = await SessionService.getDriverId();
-                          final rideId = _waitingForRideId;
-                          if (!mounted ||
-                              driverId == null ||
-                              driverId.isEmpty ||
-                              rideId == null ||
-                              rideId.isEmpty) {
-                            return;
-                          }
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => ChatScreen(
-                                rideId: rideId,
-                                senderId: driverId,
-                                senderModel: 'driver',
-                                otherPartyName: 'Passenger',
-                              ),
-                            ),
-                          );
-                        },
-                        icon: const Icon(
-                          Icons.chat_bubble_outline_rounded,
-                          size: 16,
-                        ),
-                        label: const Text('Chat with Passenger'),
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: AppColors.accentStrong,
-                          side: BorderSide(
-                            color: AppColors.accentStrong.withAlpha(160),
-                          ),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(10),
-                          ),
-                          padding: const EdgeInsets.symmetric(vertical: 10),
-                          textStyle: const TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    SizedBox(
-                      width: double.infinity,
-                      child: OutlinedButton.icon(
-                        onPressed: () async {
-                          final rideId = _waitingForRideId;
-                          if (rideId != null && rideId.isNotEmpty) {
-                            final scaffoldMessenger = ScaffoldMessenger.of(
-                              context,
-                            );
-                            await _cancelInterest(rideId);
-                            scaffoldMessenger.showSnackBar(
-                              const SnackBar(
-                                content: Text(
-                                  'Interest cancelled successfully.',
-                                ),
-                                backgroundColor: AppColors.accentRed,
-                              ),
-                            );
-                          }
-                        },
-                        icon: const Icon(
-                          Icons.cancel_outlined,
-                          size: 16,
-                          color: AppColors.accentRed,
-                        ),
-                        label: const Text(
-                          'Cancel Interest',
-                          style: TextStyle(color: AppColors.accentRed),
-                        ),
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: AppColors.accentRed,
-                          side: const BorderSide(color: AppColors.accentRed),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(10),
-                          ),
-                          padding: const EdgeInsets.symmetric(vertical: 10),
-                          textStyle: const TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
+            if (_waitingRides.isNotEmpty) const SizedBox(height: 16),
+            ..._waitingRides.entries.map((entry) {
+              final rideId = entry.key;
+              final rideData = entry.value;
+              final pickupStr =
+                  (rideData['pickup'] ?? rideData['pickupLocation'] ?? 'Pickup')
+                      .toString();
+              final destStr =
+                  (rideData['destination'] ??
+                          rideData['dropoffLocation'] ??
+                          'Destination')
+                      .toString();
 
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: GlassCard(
+                  borderRadius: BorderRadius.circular(16),
+                  padding: const EdgeInsets.all(12),
+                  color: AppColors.accentYellow.withAlpha(isDark ? 40 : 20),
+                  border: Border.all(
+                    color: AppColors.accentYellow.withAlpha(120),
+                    width: 1.0,
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          const SizedBox(
+                            width: 14,
+                            height: 14,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: AppColors.accentYellow,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'Waiting for Confirmation...',
+                              style: AppTextStyles.body.copyWith(
+                                fontSize: 12,
+                                color: textPri,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      Text(
+                        'P: $pickupStr',
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppTextStyles.body.copyWith(
+                          fontSize: 13,
+                          color: textPri,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'D: $destStr',
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppTextStyles.body.copyWith(
+                          fontSize: 13,
+                          color: textPri,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              onPressed: () async {
+                                final driverId =
+                                    await SessionService.getDriverId();
+                                if (!mounted ||
+                                    driverId == null ||
+                                    driverId.isEmpty ||
+                                    rideId.isEmpty)
+                                  return;
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => ChatScreen(
+                                      rideId: rideId,
+                                      senderId: driverId,
+                                      senderModel: 'driver',
+                                      otherPartyName: 'Passenger',
+                                    ),
+                                  ),
+                                );
+                              },
+                              icon: const Icon(
+                                Icons.chat_bubble_outline_rounded,
+                                size: 16,
+                              ),
+                              label: const Text('Chat'),
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: AppColors.accentStrong,
+                                side: BorderSide(
+                                  color: AppColors.accentStrong.withAlpha(160),
+                                ),
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 8,
+                                ),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                textStyle: const TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              onPressed: () async {
+                                if (rideId.isNotEmpty) {
+                                  final scaffoldMessenger =
+                                      ScaffoldMessenger.of(context);
+                                  await _cancelInterest(rideId);
+                                  scaffoldMessenger.showSnackBar(
+                                    const SnackBar(
+                                      content: Text('Interest cancelled.'),
+                                      backgroundColor: AppColors.accentRed,
+                                    ),
+                                  );
+                                }
+                              },
+                              icon: const Icon(Icons.cancel_outlined, size: 16),
+                              label: const Text('Cancel'),
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: AppColors.accentRed,
+                                side: BorderSide(
+                                  color: AppColors.accentRed.withAlpha(160),
+                                ),
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 8,
+                                ),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                textStyle: const TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            }).toList(),
             const SizedBox(height: 16),
 
             _buildDriverMap(context, isDark, surface, border),
