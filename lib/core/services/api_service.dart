@@ -972,10 +972,20 @@ class ApiService {
       if (zoneId != null && zoneId.isNotEmpty) {
         params['zoneId'] = zoneId;
       }
+      // Provide driverId so the backend can enforce max broadcast limits
+      final driverId = await SessionService.getDriverId();
+      if (driverId != null && driverId.isNotEmpty) {
+        params['driverId'] = driverId;
+      }
+      
       final url = Uri.parse(
         '$baseUrl/api/driver/rides',
       ).replace(queryParameters: params);
-      final res = await _client.get(url, headers: _jsonHeaders);
+      
+      // Use _authHeaders to pass the Bearer token
+      final headers = await _authHeaders();
+      final res = await _client.get(url, headers: headers);
+      
       return _parse(res);
     } on SocketException {
       return ApiResponse.error('No internet connection.');

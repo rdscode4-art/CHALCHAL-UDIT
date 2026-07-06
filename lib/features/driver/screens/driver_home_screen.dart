@@ -323,8 +323,11 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   void _onPendingRideActionChanged() {
     final pendingAction = consumePendingRideId();
     if (pendingAction != null && pendingAction.isNotEmpty) {
-      debugPrint('[REACTIVE] Handling pending action from notification tap: $pendingAction');
-      FirebaseNotificationService().cancelAllNotifications(); // Stop notification sound immediately
+      debugPrint(
+        '[REACTIVE] Handling pending action from notification tap: $pendingAction',
+      );
+      FirebaseNotificationService()
+          .cancelAllNotifications(); // Stop notification sound immediately
       if (pendingAction.startsWith('new_ride:')) {
         _handleNewRequestPush(pendingAction.substring(9).trim());
       } else if (pendingAction.startsWith('ride:')) {
@@ -2098,7 +2101,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     setState(() {
       _waitingRides.remove(rideId);
     });
-    
+
     // Ignore this ride locally so it doesn't auto-recover before backend updates
     await _markRideIgnored(rideId);
 
@@ -2447,7 +2450,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
               item['availableDrivers'] ?? item['interestedDrivers'] ?? [],
             );
             if (interestedList.map((e) => e.toString()).contains(driverId)) {
-              if (!_waitingRides.containsKey(rId) && !_ignoredRideIds.contains(rId)) {
+              if (!_waitingRides.containsKey(rId) &&
+                  !_ignoredRideIds.contains(rId)) {
                 debugPrint('🔄 Auto-recovering interested ride: $rId');
                 setState(() {
                   _waitingRides[rId] = item;

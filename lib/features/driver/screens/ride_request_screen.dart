@@ -10,6 +10,7 @@ import '../../../core/widgets/chat_screen.dart';
 import 'driver_active_ride_screen.dart';
 import '../../../core/localization/app_localizations.dart';
 import '../../../core/services/firebase_notification_service.dart';
+import '../../../widgets/driver/subscription_plans_bottom_sheet.dart';
 
 class RideRequestScreen extends StatefulWidget {
   final String rideId;
@@ -80,7 +81,9 @@ class _RideRequestScreenState extends State<RideRequestScreen> {
     // Listen for ride cancellation push
     FirebaseNotificationService().onRideCancelled = (cancelledRideId) {
       if (mounted && cancelledRideId == widget.rideId) {
-        debugPrint('🔔 [RideRequestScreen] Ride cancelled via push! Stopping sound.');
+        debugPrint(
+          '🔔 [RideRequestScreen] Ride cancelled via push! Stopping sound.',
+        );
         _audioPlayer?.stop();
         if (Navigator.canPop(context)) {
           Navigator.pop(context);
@@ -124,11 +127,13 @@ class _RideRequestScreenState extends State<RideRequestScreen> {
       final res = await ApiService.getRide(widget.rideId);
       if (res.success && res.data.isNotEmpty && mounted) {
         final data = ApiService.unwrapRidePayload(res.data);
-        
+
         // Auto-close if ride is already cancelled or completed
         final status = data['status']?.toString().toLowerCase() ?? '';
         if (status == 'cancelled' || status == 'completed') {
-          debugPrint('🚫 [RideRequestScreen] Ride is already $status! Auto-closing.');
+          debugPrint(
+            '🚫 [RideRequestScreen] Ride is already $status! Auto-closing.',
+          );
           _audioPlayer?.stop();
           if (Navigator.canPop(context)) {
             Navigator.pop(context, 'ignored');
@@ -249,6 +254,7 @@ class _RideRequestScreenState extends State<RideRequestScreen> {
     }
 
     bool success = false;
+    int? errorCode;
     try {
       final res = await ApiService.declareDriverAvailable(
         rideId: widget.rideId,
@@ -257,6 +263,7 @@ class _RideRequestScreenState extends State<RideRequestScreen> {
       success = res.success;
       if (!success) {
         _acceptError = res.errorMessage;
+        errorCode = res.statusCode;
       }
     } catch (e) {
       debugPrint('Error declaring availability: $e');
@@ -272,13 +279,61 @@ class _RideRequestScreenState extends State<RideRequestScreen> {
       Navigator.pop(context, 'interested');
     } else {
       _startCountdown();
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(_acceptError ?? 'Failed to declare availability'),
-          backgroundColor: AppColors.accentRed,
-          duration: const Duration(seconds: 3),
-        ),
-      );
+
+      // Check for 403 Forbidden which implies insufficient KMS balance
+      if (errorCode == 403) {
+        _audioPlayer?.stop();
+        showDialog(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('Insufficient Balance'),
+            content: Text(
+              _acceptError ??
+                  'You do not have enough KMS balance to accept this ride.',
+            ),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text(
+                  'Cancel',
+                  style: TextStyle(color: Colors.grey),
+                ),
+              ),
+              ElevatedButton(
+                onPressed: () {
+                  Navigator.pop(context);
+                  SubscriptionPlansBottomSheet.show(context);
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.primary,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 20,
+                    vertical: 12,
+                  ),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                ),
+                child: const Text(
+                  'Recharge Now',
+                  style: TextStyle(color: Colors.white),
+                ),
+              ),
+            ],
+          ),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(_acceptError ?? 'Failed to declare availability'),
+            backgroundColor: AppColors.accentRed,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
     }
   }
 
@@ -726,7 +781,9 @@ class _RideRequestScreenState extends State<RideRequestScreen> {
                 label: widget.isAssigned ? 'Cancel' : 'Ignore',
                 isOutlined: true,
                 color: AppColors.accentRed,
-                onPressed: _accepting ? () {} : (widget.isAssigned ? _cancel : _decline),
+                onPressed: _accepting
+                    ? () {}
+                    : (widget.isAssigned ? _cancel : _decline),
               ),
             ),
             const SizedBox(width: 14),
