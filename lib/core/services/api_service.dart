@@ -47,14 +47,15 @@ class ApiService {
   static ApiResponse _parse(http.Response res) {
     try {
       final decoded = jsonDecode(res.body);
-      
+
       // Check for 401 Global Interceptor
       if (res.statusCode == 401) {
         if (decoded is Map<String, dynamic>) {
           final message = _messageFromBody(decoded)?.toLowerCase() ?? '';
-          final isSessionExpired = message.contains('session') || 
-                                   message.contains('invalid') || 
-                                   message.contains('expired');
+          final isSessionExpired =
+              message.contains('session') ||
+              message.contains('invalid') ||
+              message.contains('expired');
           if (isSessionExpired) {
             debugPrint('EVENT: session_forced_logout_401');
             onSessionExpired?.call();
@@ -459,14 +460,20 @@ class ApiService {
       }
 
       await attach('profilePhoto', profilePhotoPath, profilePhotoXFile);
-      await attach('drivingLicensePhotoFront', drivingLicenseFrontPath, drivingLicenseFrontXFile);
+      await attach(
+        'drivingLicensePhotoFront',
+        drivingLicenseFrontPath,
+        drivingLicenseFrontXFile,
+      );
       await attach('aadharFrontPhoto', aadharFrontPath, aadharFrontXFile);
       await attach('aadharBackPhoto', aadharBackPath, aadharBackXFile);
       await attach('rcPhoto', rcPhotoPath, rcPhotoXFile);
       await attach('insurancePhoto', insurancePhotoPath, insurancePhotoXFile);
       await attach('pucPhoto', pucPhotoPath, pucPhotoXFile);
 
-      debugPrint('📡 [API] PUT /drivers/$driverId — ${request.files.length} files attached');
+      debugPrint(
+        '📡 [API] PUT /drivers/$driverId — ${request.files.length} files attached',
+      );
       final streamed = await request.send();
       final res = await http.Response.fromStream(streamed);
       debugPrint('📡 [API] PUT /drivers/$driverId: ${res.statusCode}');
@@ -660,9 +667,7 @@ class ApiService {
   }
 
   /// POST /drivers/logout — Explicitly log out the driver on the backend.
-  static Future<ApiResponse> driverLogout({
-    required String driverId,
-  }) async {
+  static Future<ApiResponse> driverLogout({required String driverId}) async {
     try {
       final res = await _client.post(
         Uri.parse('$baseUrl/drivers/logout'),
@@ -805,10 +810,7 @@ class ApiService {
       print(
         'Driver Login request fields: phone=$phone, vehicleNumber=$vehicleNumber, fcmToken=$fcmToken, deviceInfo=$deviceInfo',
       );
-      final body = {
-        'phone': phone,
-        'vehicleNumber': vehicleNumber,
-      };
+      final body = {'phone': phone, 'vehicleNumber': vehicleNumber};
       if (fcmToken != null) body['fcmToken'] = fcmToken;
       if (deviceInfo != null) body['deviceInfo'] = deviceInfo;
 
@@ -876,12 +878,7 @@ class ApiService {
     required double lng,
   }) async {
     try {
-      final body = {
-        'lat': lat,
-        'lng': lng,
-        'latitude': lat,
-        'longitude': lng,
-      };
+      final body = {'lat': lat, 'lng': lng, 'latitude': lat, 'longitude': lng};
       final headers = await _authHeaders();
       debugPrint('📡 [API] updateDriverLocationOnly Initiated: $body');
       final res = await _client.put(
@@ -893,11 +890,15 @@ class ApiService {
       if (parsedRes.success) {
         debugPrint('✅ [API] updateDriverLocationOnly SUCCESS');
       } else {
-        debugPrint('❌ [API] updateDriverLocationOnly FAILED: ${parsedRes.errorMessage}');
+        debugPrint(
+          '❌ [API] updateDriverLocationOnly FAILED: ${parsedRes.errorMessage}',
+        );
       }
       return parsedRes;
     } on SocketException {
-      debugPrint('❌ [API] updateDriverLocationOnly FAILED: No internet connection');
+      debugPrint(
+        '❌ [API] updateDriverLocationOnly FAILED: No internet connection',
+      );
       return ApiResponse.error('No internet connection.');
     } catch (e) {
       debugPrint('❌ [API] updateDriverLocationOnly ERROR: $e');
@@ -977,15 +978,15 @@ class ApiService {
       if (driverId != null && driverId.isNotEmpty) {
         params['driverId'] = driverId;
       }
-      
+
       final url = Uri.parse(
         '$baseUrl/api/driver/rides',
       ).replace(queryParameters: params);
-      
+
       // Use _authHeaders to pass the Bearer token
       final headers = await _authHeaders();
       final res = await _client.get(url, headers: headers);
-      
+
       return _parse(res);
     } on SocketException {
       return ApiResponse.error('No internet connection.');
@@ -3273,6 +3274,41 @@ class ApiService {
       return ApiResponse.error('No internet connection.');
     } catch (e) {
       return ApiResponse.error('Fetch active zones failed: $e');
+    }
+  }
+
+  /// POST /api/driver/ride/ignore-broadcast — driver ignores a broadcast ride.
+  /// Body: `{ "rideId", "driverId" }`
+  static Future<ApiResponse> ignoreBroadcastRide({
+    required String rideId,
+    required String driverId,
+  }) async {
+    try {
+      final headers = await _authHeaders();
+      final body = jsonEncode({'rideId': rideId, 'driverId': driverId});
+
+      final String curl =
+          "curl -X POST '$baseUrl/api/driver/ride/ignore-broadcast' "
+          "-H 'Authorization: ${headers['Authorization']}' "
+          "-H 'Content-Type: application/json' "
+          "-d '$body'";
+      debugPrint('📡 [API cURL] $curl');
+
+      final res = await _client.post(
+        Uri.parse('$baseUrl/api/driver/ride/ignore-broadcast'),
+        headers: headers,
+        body: body,
+      );
+
+      debugPrint(
+        '📡 [API RESPONSE] Status: ${res.statusCode}, Body: ${res.body}',
+      );
+
+      return _parse(res);
+    } on SocketException {
+      return ApiResponse.error('No internet connection.');
+    } catch (e) {
+      return ApiResponse.error('Ignoring broadcast ride failed: $e');
     }
   }
 

@@ -653,6 +653,19 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
       } else {
         await _markRideIgnored(rideId);
         RideRequestService.removeRequestByRideId(rideId);
+        
+        final driverId = await SessionService.getDriverId();
+        if (driverId != null && driverId.isNotEmpty) {
+          ApiService.ignoreBroadcastRide(rideId: rideId, driverId: driverId)
+              .then((res) {
+            if (res.success) {
+              debugPrint('✅ [IGNORE] Successfully ignored broadcast $rideId from push');
+            } else {
+              debugPrint('⚠️ [IGNORE] Failed to ignore broadcast from push: ${res.errorMessage}');
+            }
+          });
+        }
+        
         _startPolling();
       }
     } finally {
@@ -2553,10 +2566,20 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
               break;
             } else {
               // Driver hit ignore, or timer expired, or back button.
-              // CRITICAL FIX: DO NOT send rejectRide API call for unassigned rides!
-              // Just mark it ignored locally so it doesn't pop up again.
+              // Mark it ignored locally so it doesn't pop up again.
               await _markRideIgnored(rId);
               RideRequestService.removeRequestByRideId(rId);
+              
+              // Hit the API so backend knows this broadcast was ignored by this driver
+              ApiService.ignoreBroadcastRide(rideId: rId, driverId: driverId)
+                  .then((res) {
+                if (res.success) {
+                  debugPrint('✅ [IGNORE] Successfully ignored broadcast $rId');
+                } else {
+                  debugPrint('⚠️ [IGNORE] Failed to ignore broadcast: ${res.errorMessage}');
+                }
+              });
+
               break; // Stop popping up back-to-back to give driver a breather
             }
           } finally {
